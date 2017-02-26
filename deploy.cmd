@@ -17,14 +17,13 @@ IF %ERRORLEVEL% NEQ 0 (
 
 :: Setup
 :: -----
-call :EchoHead Setup
 
 setlocal enabledelayedexpansion
 
 SET ARTIFACTS=%~dp0%..\artifacts
 
 IF NOT DEFINED DEPLOYMENT_SOURCE (
-  SET DEPLOYMENT_SOURCE=%~dp0%
+  SET DEPLOYMENT_SOURCE=%~dp0%.
 )
 
 IF NOT DEFINED DEPLOYMENT_TARGET (
@@ -35,7 +34,7 @@ IF NOT DEFINED NEXT_MANIFEST_PATH (
   SET NEXT_MANIFEST_PATH=%ARTIFACTS%\manifest
 
   IF NOT DEFINED PREVIOUS_MANIFEST_PATH (
-    SET PREVIOUS_MANIFEST_PATH=%NEXT_MANIFEST_PATH%
+    SET PREVIOUS_MANIFEST_PATH=%ARTIFACTS%\manifest
   )
 )
 
@@ -48,7 +47,6 @@ IF NOT DEFINED KUDU_SYNC_CMD (
   :: Locally just running "kuduSync" would also work
   SET KUDU_SYNC_CMD=%appdata%\npm\kuduSync.cmd
 )
-
 IF NOT DEFINED DEPLOYMENT_TEMP (
   SET DEPLOYMENT_TEMP=%temp%\___deployTemp%random%
   SET CLEAN_LOCAL_DEPLOYMENT_TEMP=true
@@ -63,29 +61,30 @@ IF DEFINED MSBUILD_PATH goto MsbuildPathDefined
 SET MSBUILD_PATH=%ProgramFiles(x86)%\MSBuild\14.0\Bin\MSBuild.exe
 :MsbuildPathDefined
 
-IF DEFINED NUGET_EXE goto NugetExeDefined
-SET NUGET_EXE=C:\git\nuget.exe
-:NugetExeDefined
-
 ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 :: Deployment
 :: ----------
 
-call :EchoHead Deployment
+echo Handling .NET Web Application deployment.
 
-:: 0. Nuget.exe restore
-call :ExecuteCmd "%NUGET_EXE%" restore "%DEPLOYMENT_SOURCE%\MyProj\MyProj.sln" -Verbosity detailed -NonInteractive
-IF !ERRORLEVEL! NEQ 0 goto error
+:: 1. Restore NuGet packages
+IF /I "MyProj\MyProj.sln" NEQ "" (
+  call :ExecuteCmd nuget restore "%DEPLOYMENT_SOURCE%\MyProj\MyProj.sln"
+  IF !ERRORLEVEL! NEQ 0 goto error
+)
 
-:: 1. Build to the repository path
-:: NOTE: Setting ResolveNuGetPackages=false due to deployment issue with nuget.targets. We are manually restoring packages above
-call :ExecuteCmd "%MSBUILD_PATH%" "%DEPLOYMENT_SOURCE%\MyProj\MyProj.sln" /verbosity:m /nologo /p:ResolveNuGetPackages=false /p:Configuration=Release %SCM_BUILD_ARGS%
-IF !ERRORLEVEL! NEQ 0 goto error
-
-:: 2. KuduSync Web and WebJob
+:: 2. Build to the temporary path
 IF /I "%IN_PLACE_DEPLOYMENT%" NEQ "1" (
-  echo :: Deploying Web
-  call :ExecuteCmd "%KUDU_SYNC_CMD%" -v 50 -f "%DEPLOYMENT_SOURCE%\MyProj" -t "%DEPLOYMENT_TARGET%" -n "%NEXT_MANIFEST_PATH%" -p "%PREVIOUS_MANIFEST_PATH%" -i ".tmp;.git;.hg;.deployment;deploy.cmd;obj;node_modules"
+  call :ExecuteCmd "%MSBUILD_PATH%" "%DEPLOYMENT_SOURCE%\MyProj\MyProj.csproj" /nologo /verbosity:m /t:Build /t:pipelinePreDeployCopyAllFilesToOneFolder /p:_PackageTempDir="%DEPLOYMENT_TEMP%";AutoParameterizationWebConfigConnectionStrings=false;Configuration=Release;UseSharedCompilation=false /p:SolutionDir="%DEPLOYMENT_SOURCE%\MyProj\\" %SCM_BUILD_ARGS%
+) ELSE (
+  call :ExecuteCmd "%MSBUILD_PATH%" "%DEPLOYMENT_SOURCE%\MyProj\MyProj.csproj" /nologo /verbosity:m /t:Build /p:AutoParameterizationWebConfigConnectionStrings=false;Configuration=Release;UseSharedCompilation=false /p:SolutionDir="%DEPLOYMENT_SOURCE%\MyProj\\" %SCM_BUILD_ARGS%
+)
+
+IF !ERRORLEVEL! NEQ 0 goto error
+
+:: 3. KuduSync
+IF /I "%IN_PLACE_DEPLOYMENT%" NEQ "1" (
+  call :ExecuteCmd "%KUDU_SYNC_CMD%" -v 50 -f "%DEPLOYMENT_TEMP%" -t "%DEPLOYMENT_TARGET%" -n "%NEXT_MANIFEST_PATH%" -p "%PREVIOUS_MANIFEST_PATH%" -i ".git;.hg;.deployment;deploy.cmd"
   IF !ERRORLEVEL! NEQ 0 goto error
 )
 
@@ -96,18 +95,9 @@ goto end
 :ExecuteCmd
 setlocal
 set _CMD_=%*
-echo :: %_CMD_%
 call %_CMD_%
 if "%ERRORLEVEL%" NEQ "0" echo Failed exitCode=%ERRORLEVEL%, command=%_CMD_%
-echo.
 exit /b %ERRORLEVEL%
-
-:EchoHead
-echo ::::::::::::::::::::::::::::::::::::::::::::::::::::::
-echo :: %*
-echo :: ---------------------------
-echo.
-exit /b 0
 
 :error
 endlocal
