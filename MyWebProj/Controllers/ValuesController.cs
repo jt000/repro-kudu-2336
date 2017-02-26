@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Web.Http;
+using MyHelpers;
 
 namespace MyWebProj.Controllers
 {
@@ -14,7 +15,7 @@ namespace MyWebProj.Controllers
         {
             return new HttpResponseMessage()
                            {
-                               Content = new ByteArrayContent(Encoding.ASCII.GetBytes("Hello World!")),
+                               Content = new ByteArrayContent(Encoding.ASCII.GetBytes(ValueRepository.Get())),
                            };
         }
     }
